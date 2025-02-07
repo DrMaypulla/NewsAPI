@@ -3,5 +3,4 @@ uvicorn
 motor
 pydantic
 python-dotenv
-pymongo gridfs
 pymongo

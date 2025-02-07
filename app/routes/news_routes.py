@@ -1,23 +1,21 @@
-from fastapi import APIRouter, Query, UploadFile, File, HTTPException
-from ..database.mongo import db,fs
+from fastapi import APIRouter, Query, UploadFile, File, HTTPException, FastAPI
+from fastapi.responses import StreamingResponse
+import app.database.mongo
 from bson.objectid import ObjectId
 
-news = APIRouter()
-collection = db["news"]
+news = FastAPI()
+collection = app.database.mongo.db["news"]
 
 
-@news.post("news/create")
+@news.post("/news/create")
 async def create_news(
         title: str = Query(..., alias="title"),
         description: str = Query(..., alias="description"),
         content: str = Query(..., alias="content"),
         image: UploadFile = File(...)
 ):
-    # Чтение данных изображения
-    image_data = await image.read()  # Чтение данных файла
-
-    # Загружаем изображение в GridFS
-    image_id = await fs.upload_from_stream(image.filename, image.file)
+    # Чтение данных изображен
+    image_id = await app.database.mongo.fs.upload_from_stream(image.filename, image.file)
 
     # Формируем документ для базы данных
     news_dict = {
@@ -25,7 +23,7 @@ async def create_news(
         "title": title,
         "description": description,
         "content": content,
-        "image_id": image_id,  # Сохраняем ID изображения из GridFS как строку
+        "image_id": image_id,
     }
 
     # Вставляем документ в MongoDB (асинхронно)
@@ -33,7 +31,8 @@ async def create_news(
 
     news_dict["_id"] = str(news_dict["_id"])
     news_dict["image_id"] = str(news_dict["image_id"])
-    return news_dict
+
+    return {"message": image}
 
 """@news.post("/create")
 async def create_news(news_item: NewsItem):
@@ -42,7 +41,7 @@ async def create_news(news_item: NewsItem):
     return news"""
 
 
-@news.get("news/all")
+@news.get("/news/all")
 async def get_all_news():
     cursor = collection.find({})
     news_list = []
@@ -57,7 +56,7 @@ async def get_all_news():
 
     return news_list
 
-@news.delete("news/delete/{id}")
+@news.delete("/news/delete/{id}")
 async def delete_news(id: str):
     if not ObjectId.is_valid(id):  # Проверка на правильность формата ObjectId
         raise HTTPException(status_code=400, detail="Invalid ObjectId format")
@@ -67,3 +66,19 @@ async def delete_news(id: str):
         raise HTTPException(status_code=404, detail="Новость не найдена")
     return {"message": "Новость успешно удалена", "id": id}
 
+
+@news.get("/news/download/{id}")
+async def download_news_image(id: str):
+    if not ObjectId.is_valid(id):
+        raise HTTPException(status_code=400, detail="Invalid ObjectId format")
+
+    object_id = ObjectId(id)
+
+    try:
+        # Open the download stream for the file
+        file_stream = await app.database.mongo.fs.open_download_stream(object_id)
+
+        # Return the file as a streaming response
+        return StreamingResponse(file_stream, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename={file_stream.filename}"})
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"File not found: {str(e)}")
