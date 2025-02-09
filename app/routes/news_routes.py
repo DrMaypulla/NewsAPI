@@ -1,84 +1,72 @@
 from fastapi import APIRouter, Query, UploadFile, File, HTTPException, FastAPI
-from fastapi.responses import StreamingResponse
-import app.database.mongo
-from bson.objectid import ObjectId
+import sqlite3
+import os
 
-news = FastAPI()
-collection = app.database.mongo.db["news"]
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # `app/`
+UPLOAD_DIR = os.path.join(BASE_DIR, "static")  # `app/static/`
+DB_PATH = os.path.join(BASE_DIR,"database", "news.db")  # Путь к БД
 
+news = APIRouter()
 
 @news.post("/news/create")
 async def create_news(
-        title: str = Query(..., alias="title"),
-        description: str = Query(..., alias="description"),
-        content: str = Query(..., alias="content"),
-        image: UploadFile = File(...)
+    title: str = Query(..., alias="title"),
+    description: str = Query(..., alias="description"),
+    content: str = Query(..., alias="content"),
+    image: UploadFile = File(...)
 ):
-    # Чтение данных изображен
-    image_id = await app.database.mongo.fs.upload_from_stream(image.filename, image.file)
+    try:
 
-    # Формируем документ для базы данных
-    news_dict = {
-        "_id": (ObjectId()),  # Генерация нового ID для записи
-        "title": title,
-        "description": description,
-        "content": content,
-        "image_id": image_id,
-    }
+        image_path = os.path.join(UPLOAD_DIR, image.filename)
+        relative_image_path = f"static/{image.filename}"
+        with open(image_path, "wb") as buffer:
+            buffer.write(await image.read())
 
-    # Вставляем документ в MongoDB (асинхронно)
-    await collection.insert_one(news_dict)
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
 
-    news_dict["_id"] = str(news_dict["_id"])
-    news_dict["image_id"] = str(news_dict["image_id"])
+        cursor.execute("""
+            INSERT INTO news (title, description, content, image_url)
+            VALUES (?, ?, ?, ?)
+        """, ( title, description, content, relative_image_path))
+        news_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
 
-    return {"message": image}
+        return {
+            "id": news_id,
+            "title": title,
+            "description": description,
+            "content": content,
+            "image_url": relative_image_path
+        }
 
-"""@news.post("/create")
-async def create_news(news_item: NewsItem):
-    news = {"_id": str(ObjectId()), **news_item.dict()}
-    # Возвращаем результат
-    return news"""
-
-
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating news: {str(e)}")
 @news.get("/news/all")
 async def get_all_news():
-    cursor = collection.find({})
-    news_list = []
-
-    async for news_item in cursor:
-        # Convert ObjectId to string for all fields
-        news_item["_id"] = str(news_item["_id"])
-        news_item["image_id"] = str(news_item["image_id"])
-
-        # Append the document to the list
-        news_list.append(news_item)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM news")
+    rows = cursor.fetchall()
+    column_names = [desc[0] for desc in cursor.description]
+    conn.close()
+    news_list = [dict(zip(column_names, row)) for row in rows]
 
     return news_list
 
+
 @news.delete("/news/delete/{id}")
-async def delete_news(id: str):
-    if not ObjectId.is_valid(id):  # Проверка на правильность формата ObjectId
-        raise HTTPException(status_code=400, detail="Invalid ObjectId format")
-    delete_filter = {"_id": ObjectId(id)}
-    result = await collection.find_one_and_delete(delete_filter)
-    if not result:
+async def delete_news(id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM news WHERE id = ?", (id,))
+    news_item = cursor.fetchone()
+    if not news_item:
+        conn.close()
         raise HTTPException(status_code=404, detail="Новость не найдена")
+    cursor.execute("DELETE FROM news WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+
     return {"message": "Новость успешно удалена", "id": id}
-
-
-@news.get("/news/download/{id}")
-async def download_news_image(id: str):
-    if not ObjectId.is_valid(id):
-        raise HTTPException(status_code=400, detail="Invalid ObjectId format")
-
-    object_id = ObjectId(id)
-
-    try:
-        # Open the download stream for the file
-        file_stream = await app.database.mongo.fs.open_download_stream(object_id)
-
-        # Return the file as a streaming response
-        return StreamingResponse(file_stream, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename={file_stream.filename}"})
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"File not found: {str(e)}")
