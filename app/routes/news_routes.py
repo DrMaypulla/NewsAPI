@@ -8,7 +8,7 @@ DB_PATH = os.path.join(BASE_DIR,"database", "news.db")  # Путь к БД
 
 news = APIRouter()
 
-@news.post("/news/create")
+@news.post("/news/create", tags=["news"])
 async def create_news(
     title: str = Query(..., alias="title"),
     description: str = Query(..., alias="description"),
@@ -43,7 +43,7 @@ async def create_news(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating news: {str(e)}")
-@news.get("/news/all")
+@news.get("/news/all", tags=["news"])
 async def get_all_news():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -56,7 +56,7 @@ async def get_all_news():
     return news_list
 
 
-@news.delete("/news/delete/{id}")
+@news.delete("/news/delete/{id}", tags=["news"])
 async def delete_news(id: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
